@@ -33,11 +33,32 @@
 #pragma once
 
 #include <vector>
-// #include <lpsolve/lp_lib.h> /* uncomment this line to include lp_solve */
+#include <lpsolve/lp_lib.h>
 #include "traits.hpp"
+#include "isop.hpp"
 
 namespace kitty
 {
+
+namespace util
+{
+
+//TODO start using this again
+/// Returns 1 for pos unate, -1 for neg unate and 0 for binate
+template<typename TT, typename = std::enable_if_t<is_complete_truth_table<TT>::value>>
+int is_unate( const TT& tt, uint8_t var_index )
+{
+  auto const tt0 = cofactor0( tt, var_index );
+  auto const tt1 = cofactor1( tt, var_index );
+
+  if ( is_const0( tt0 & ~tt1 ) )
+    return 1;
+  if ( is_const0( tt1 & ~tt0 ) )
+    return -1;
+  return 0;
+}
+
+} // namespace util
 
 /*! \brief Threshold logic function identification
 
@@ -56,21 +77,145 @@ namespace kitty
   \return `true` if `tt` is a TF; `false` if `tt` is a non-TF.
 */
 template<typename TT, typename = std::enable_if_t<is_complete_truth_table<TT>::value>>
-bool is_threshold( const TT& tt, std::vector<int64_t>* plf = nullptr )
+bool is_threshold( const TT& tt_orig, std::vector<int64_t>* plf = nullptr )
 {
-  std::vector<int64_t> linear_form;
+  auto num_vars = tt_orig.num_vars();
 
-  /* TODO */
-  /* if tt is non-TF: */
-  return false;
+  //convert to positive unate
+  auto tt_star( tt_orig );
+  std::vector<bool> flipped;
 
-  /* if tt is TF: */
-  /* push the weight and threshold values into `linear_form` */
-  if ( plf )
+  for ( uint8_t var_index = 0u; var_index < num_vars; var_index++ )
   {
-    *plf = linear_form;
+    auto const tt0 = cofactor0( tt_star, var_index );
+    auto const tt1 = cofactor1( tt_star, var_index );
+
+    if ( is_const0( tt0 & ~tt1 ) )
+    {
+      //pos unate
+      flipped.push_back( false );
+    }
+    else if ( is_const0( tt1 & ~tt0 ) )
+    {
+      //neg unate
+      flip_inplace( tt_star, var_index );
+      flipped.push_back( true );
+    }
+    else
+    {
+      //binate
+      return false;
+    }
   }
-  return true;
+
+  //construct ILP
+  lprec* lp = make_lp( 0, num_vars + 1 );
+  set_col_name(lp, 1, "T");
+  for (int i = 0; i < num_vars + 1; i++) {
+    set_int(lp, i + 1, true);
+  }
+
+  auto col_indices = new int[num_vars+1];
+  auto row_values = new double[num_vars+1];
+
+  //-T as first col
+  col_indices[0] = 1;
+  row_values[0] = -1;
+
+  set_add_rowmode( lp, true );
+
+  std::vector<cube> on_sets = isop( tt_star );
+  std::vector<cube> off_sets = isop( ~tt_star );
+
+  for ( auto on_cube : on_sets )
+  {
+    std::cout << "on cube:  ";
+    on_cube.print(num_vars);
+    std::cout << std::endl;
+
+    int j = 1;
+
+    for ( int i = 0; i < num_vars; i++ )
+    {
+      if ( on_cube.get_mask( i ) && on_cube.get_bit( i ) )
+      {
+        col_indices[j] = i + 2;
+        row_values[j] = 1;
+        j++;
+      }
+    }
+
+    add_constraintex( lp, j, row_values, col_indices, GE, 0 );
+  }
+
+  for ( auto off_cube : off_sets )
+  {
+    int j = 1;
+
+    std::cout << "off cube: ";
+    off_cube.print(num_vars);
+    std::cout << std::endl;
+
+    for ( int i = 0; i < num_vars; i++ )
+    {
+      if ( !off_cube.get_mask( i ) && !off_cube.get_bit( i ) )
+      {
+        col_indices[j] = i + 2;
+        row_values[j] = 1;
+        j++;
+      }
+    }
+
+    add_constraintex( lp, j, row_values, col_indices, LE, -1 );
+  }
+
+  set_add_rowmode( lp, false );
+
+  //add objective
+  set_minim( lp );
+  for ( int i = 0; i < num_vars + 1; i++ )
+  {
+    col_indices[i] = i + 1;
+    row_values[i] = 1;
+  }
+  set_obj_fnex( lp, num_vars + 1, row_values, col_indices );
+
+  write_LP( lp, stdout );
+
+  auto result = solve(lp);
+  bool solved = false;
+
+  if (result == OPTIMAL) {
+
+    print_solution(lp, num_vars+1);
+
+    solved = true;
+    if (plf) {
+      plf->clear();
+      get_variables(lp, row_values);
+      auto t_result = row_values[0];
+      for (int i = 0; i < num_vars; i++) {
+        plf->push_back((int64_t) row_values[i + 1]);
+        if (flipped[i]) {
+          t_result -= plf->back();
+          plf->back() *= -1;
+        }
+      }
+      plf->push_back((int64_t) t_result);
+    }
+
+    std::cout << "Linear form: ";
+    for (auto x : *plf) {
+      std::cout << x << ", ";
+    }
+    std::cout << std::endl;
+
+  }
+
+  delete[] col_indices;
+  delete[] row_values;
+
+  return solved;
 }
 
 } /* namespace kitty */
