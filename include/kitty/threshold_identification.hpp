@@ -87,36 +87,29 @@ bool is_threshold( const TT& tt_orig, std::vector<int64_t>* plf = nullptr )
 
   for ( uint8_t var_index = 0u; var_index < num_vars; var_index++ )
   {
-    auto const tt0 = cofactor0( tt_star, var_index );
-    auto const tt1 = cofactor1( tt_star, var_index );
+    auto x = util::is_unate( tt_orig, var_index );
 
-    if ( is_const0( tt0 & ~tt1 ) )
+    if ( x == 0 )
     {
-      //pos unate
-      flipped.push_back( false );
-    }
-    else if ( is_const0( tt1 & ~tt0 ) )
-    {
-      //neg unate
-      flip_inplace( tt_star, var_index );
-      flipped.push_back( true );
-    }
-    else
-    {
-      //binate
       return false;
     }
+    else if ( x == -1 )
+    {
+      flip_inplace( tt_star, var_index );
+    }
+    flipped.push_back(x == -1);
   }
 
   //construct ILP
   lprec* lp = make_lp( 0, num_vars + 1 );
-  set_col_name(lp, 1, "T");
-  for (int i = 0; i < num_vars + 1; i++) {
-    set_int(lp, i + 1, true);
+  set_col_name( lp, 1, "T" );
+  for ( int i = 0; i < num_vars + 1; i++ )
+  {
+    set_int( lp, i + 1, true );
   }
 
-  auto col_indices = new int[num_vars+1];
-  auto row_values = new double[num_vars+1];
+  auto col_indices = new int[num_vars + 1];
+  auto row_values = new double[num_vars + 1];
 
   //-T as first col
   col_indices[0] = 1;
@@ -130,7 +123,7 @@ bool is_threshold( const TT& tt_orig, std::vector<int64_t>* plf = nullptr )
   for ( auto on_cube : on_sets )
   {
     std::cout << "on cube:  ";
-    on_cube.print(num_vars);
+    on_cube.print( num_vars );
     std::cout << std::endl;
 
     int j = 1;
@@ -153,7 +146,7 @@ bool is_threshold( const TT& tt_orig, std::vector<int64_t>* plf = nullptr )
     int j = 1;
 
     std::cout << "off cube: ";
-    off_cube.print(num_vars);
+    off_cube.print( num_vars );
     std::cout << std::endl;
 
     for ( int i = 0; i < num_vars; i++ )
@@ -182,34 +175,33 @@ bool is_threshold( const TT& tt_orig, std::vector<int64_t>* plf = nullptr )
 
   write_LP( lp, stdout );
 
-  auto result = solve(lp);
+  //solve LP
+  auto result = solve( lp );
   bool solved = false;
 
-  if (result == OPTIMAL) {
+  if ( result == OPTIMAL )
+  {
 
-    print_solution(lp, num_vars+1);
+    print_solution( lp, num_vars + 1 );
 
     solved = true;
-    if (plf) {
+    if ( plf )
+    {
+      //convert solution to expected return format
       plf->clear();
-      get_variables(lp, row_values);
+      get_variables( lp, row_values );
       auto t_result = row_values[0];
-      for (int i = 0; i < num_vars; i++) {
-        plf->push_back((int64_t) row_values[i + 1]);
-        if (flipped[i]) {
+      for ( int i = 0; i < num_vars; i++ )
+      {
+        plf->push_back( (int64_t)row_values[i + 1] );
+        if ( flipped[i] )
+        {
           t_result -= plf->back();
           plf->back() *= -1;
         }
       }
-      plf->push_back((int64_t) t_result);
+      plf->push_back( (int64_t)t_result );
     }
-
-    std::cout << "Linear form: ";
-    for (auto x : *plf) {
-      std::cout << x << ", ";
-    }
-    std::cout << std::endl;
-
   }
 
   delete[] col_indices;
